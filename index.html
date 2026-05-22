@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>辦公室飲料揪團</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-4 md:p-6 min-h-screen relative">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo, useEffect } = React;
+
+    // ⚠️ 請在這裡貼上你的 Google Apps Script 網頁應用程式網址
+    const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwGvnPjgtisXYmK0f8oVlBa_PaMD0wiwRUu67xawazaDidfUwcoJw4Oy_U0wsbQ9gRfgA/exec";
+
+    function DrinkOrderApp() {
+      const [isLoading, setIsLoading] = useState(true);
+      const [isAdmin, setIsAdmin] = useState(false); // 控制是否為主揪視角
+      const [sysSettings, setSysSettings] = useState({ status: 'open', date: '', shop: '' });
+      const [menuItems, setMenuItems] = useState([]);
+      const [myOrders, setMyOrders] = useState([]); // 使用者只看自己的單
+      const [allOrdersSummary, setAllOrdersSummary] = useState([]); // 給主揪看的總表
+      const [isSubmitting, setIsSubmitting] = useState(false);
+      
+      const [formData, setFormData] = useState({
+        name: '', item: '', size: 'L (大杯)', sweetness: '微糖 (3分)', ice: '微冰'
+      });
+
+      const sizes = ['L (大杯)', 'M (中杯)', '瓶裝'];
+      const sweetnessLevels = ['正常糖', '少糖 (7分)', '半糖 (5分)', '微糖 (3分)', '一分糖', '無糖'];
+      const iceLevels = ['正常冰', '少冰', '微冰', '去冰', '完全去冰', '常溫', '溫', '熱'];
+
+      // 網頁載入時，抓取「設定」與「菜單」
+      useEffect(() => {
+        fetch(GAS_WEB_APP_URL)
+          .then(res => res.json())
+          .then(data => {
+            if (data.status === "success") {
+              setMenuItems(data.menu);
+              setSysSettings(data.settings);
+              setFormData(prev => ({ ...prev, item: data.menu[0] }));
+            }
+          })
+          .catch(err => console.error(err))
+          .finally(() => setIsLoading(false));
+      }, []);
+
+      const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+      };
+
+      // 【一般使用者】送出訂單
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!formData.name.trim()) return alert('請輸入姓名！');
+        
+        setIsSubmitting(true);
+        try {
+          await fetch(GAS_WEB_APP_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...formData, action: 'submitOrder' })
+          });
+          setMyOrders(prev => [...prev, { ...formData, id: Date.now() }]);
+          setFormData(prev => ({ ...prev, name: '' }));
+          alert('訂單已送出！');
+        } catch (error) {
+          alert('傳送失敗，請聯絡主揪！');
+        } finally {
+          setIsSubmitting(false);
+        }
+      };
+
+      // 【主揪功能】儲存系統設定 (日期、店名、開關)
+      const handleSaveSettings = async (e) => {
+        e.preventDefault();
+        setIsSubmitting(true);
+        try {
+          await fetch(GAS_WEB_APP_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...sysSettings, action: 'updateSettings' })
+          });
+          alert('設定已更新！其他人重新整理網頁就會看到新狀態。');
+        } catch (error) {
+          alert('更新失敗');
+        } finally {
+          setIsSubmitting(false);
+        }
+      };
+
+      // 【主揪功能】載入所有人的訂單總表
+      const loadSummary = async () => {
+        try {
+          const res = await fetch(GAS_WEB_APP_URL + "?action=getSummary");
+          const data = await res.json();
+          if (data.status === "success") {
+            // 合併同規格訂單邏輯
+            const summary = {};
+            data.data.forEach(order => {
+              const key = `${order.item} | ${order.size} | ${order.sweetness} | ${order.ice}`;
+              if (summary[key]) {
+                summary[key].count += 1;
+                summary[key].names.push(order.name);
+              } else {
+                summary[key] = { ...order, count: 1, names: [order.name] };
+              }
+            });
+            setAllOrdersSummary(Object.values(summary).sort((a, b) => b.count - a.count));
+          }
+        } catch (error) {
+          alert('無法載入總表，請確認連線。');
+        }
+      };
+
+      // 主揪登入驗證
+      const triggerAdminLogin = () => {
+        const pwd = prompt("請輸入主揪密碼：");
+        if (pwd === "8888") setIsAdmin(true);
+        else if (pwd !== null) alert("密碼錯誤");
+      };
+
+      if (isLoading) return <div class="text-center mt-20 text-gray-500">系統載入中...</div>;
+
+      return (
+        <div class="max-w-4xl mx-auto space-y-6 pb-20">
+          
+          {/* ----- 頂部標題與狀態區 ----- */}
+          <div class="bg-white p-6 rounded-lg shadow-md flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div>
+              <p class="text-sm text-blue-600 font-bold mb-1">{sysSettings.date} 揪團</p>
+              <h1 class="text-2xl font-bold text-gray-800">🧋 {sysSettings.shop}</h1>
+            </div>
+            <div>
+              {sysSettings.status === 'open' 
+                ? <span class="bg-green-100 text-green-700 px-4 py-2 rounded-full font-bold text-sm">🟢 收單中，請填寫</span>
+                : <span class="bg-red-100 text-red-700 px-4 py-2 rounded-full font-bold text-sm">🛑 已結單，停止點餐</span>
+              }
+            </div>
+          </div>
+
+          {/* ----- 根據權限顯示不同區塊 ----- */}
+          {!isAdmin ? (
+            /* 一般使用者視角 */
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* 左側：點餐表單 */}
+              <div class="bg-white p-6 rounded-lg shadow-md">
+                <h2 class="text-xl font-bold mb-4 border-b pb-2 text-gray-700">新增我的訂單</h2>
+                {sysSettings.status === 'open' ? (
+                  <form onSubmit={handleSubmit} class="space-y-4">
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700">姓名</label>
+                      <input type="text" name="name" value={formData.name} onChange={handleChange} required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-blue-500" placeholder="你的名字" disabled={isSubmitting}/>
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700">飲品品項</label>
+                      <select name="item" value={formData.item} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2" disabled={isSubmitting}>
+                        {menuItems.map((item, i) => <option key={i} value={item}>{item}</option>)}
+                      </select>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2">
+                      <div>
+                        <label class="block text-sm text-gray-700">大小</label>
+                        <select name="size" value={formData.size} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2">
+                          {sizes.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label class="block text-sm text-gray-700">甜度</label>
+                        <select name="sweetness" value={formData.sweetness} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2">
+                          {sweetnessLevels.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label class="block text-sm text-gray-700">冰量</label>
+                        <select name="ice" value={formData.ice} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2">
+                          {iceLevels.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <button type="submit" disabled={isSubmitting} class="w-full text-white bg-blue-600 hover:bg-blue-700 py-2 px-4 rounded-md font-medium transition-colors">
+                      {isSubmitting ? '傳送中...' : '送出訂單'}
+                    </button>
+                  </form>
+                ) : (
+                  <div class="text-center py-10 text-gray-500"><p class="text-lg font-semibold">主揪已經收單囉 🛑</p></div>
+                )}
+              </div>
+
+              {/* 右側：使用者的個人明細 */}
+              <div class="bg-white p-6 rounded-lg shadow-md max-h-[400px] overflow-y-auto">
+                <h2 class="text-xl font-bold mb-4 border-b pb-2 text-gray-700">本次點餐明細</h2>
+                {myOrders.length === 0 ? (
+                  <p class="text-gray-400 text-center py-8">送出後，這裡會顯示你點的飲料。</p>
+                ) : (
+                  <ul class="divide-y divide-gray-200">
+                    {myOrders.map(order => (
+                      <li key={order.id} class="py-3">
+                        <p class="font-bold text-gray-800">{order.name}</p>
+                        <p class="text-sm text-gray-500">{order.item} ({order.size}) / {order.sweetness} / {order.ice}</p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* 主揪後台視角 */
+            <div class="space-y-6">
+              {/* 控制面板 */}
+              <div class="bg-gray-800 text-white p-6 rounded-lg shadow-md border-t-4 border-yellow-400">
+                <h2 class="text-xl font-bold mb-4 text-yellow-400">⚙️ 主揪控制面板</h2>
+                <form onSubmit={handleSaveSettings} class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                  <div>
+                    <label class="block text-sm text-gray-300 mb-1">開團日期</label>
+                    <input type="text" value={sysSettings.date} onChange={e => setSysSettings({...sysSettings, date: e.target.value})} class="w-full p-2 rounded text-black" placeholder="例如：2023/10/05" />
+                  </div>
+                  <div>
+                    <label class="block text-sm text-gray-300 mb-1">飲料店名</label>
+                    <input type="text" value={sysSettings.shop} onChange={e => setSysSettings({...sysSettings, shop: e.target.value})} class="w-full p-2 rounded text-black" placeholder="例如：50嵐" />
+                  </div>
+                  <div>
+                    <label class="block text-sm text-gray-300 mb-1">收單狀態</label>
+                    <select value={sysSettings.status} onChange={e => setSysSettings({...sysSettings, status: e.target.value})} class="w-full p-2 rounded text-black font-bold">
+                      <option value="open">🟢 開放填寫中</option>
+                      <option value="closed">🛑 關閉收單</option>
+                    </select>
+                  </div>
+                  <button type="submit" disabled={isSubmitting} class="bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-2 px-4 rounded w-full">
+                    {isSubmitting ? '儲存中...' : '儲存發布'}
+                  </button>
+                </form>
+              </div>
+
+              {/* 總表區域 */}
+              <div class="bg-white p-6 rounded-lg shadow-md border-t-4 border-blue-500">
+                <div class="flex justify-between items-center mb-4 border-b pb-2">
+                  <h2 class="text-xl font-bold text-gray-800">📝 最終點餐總表 (同規格合併)</h2>
+                  <button onClick={loadSummary} class="bg-blue-100 text-blue-700 hover:bg-blue-200 px-4 py-1 rounded text-sm font-bold">
+                    🔄 載入/更新全部訂單
+                  </button>
+                </div>
+                
+                <div class="overflow-x-auto">
+                  <table class="min-w-full text-left text-sm whitespace-nowrap border-collapse">
+                    <thead class="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th class="px-4 py-3 border-r font-medium text-gray-600">飲品名稱</th>
+                        <th class="px-4 py-3 border-r font-medium text-gray-600">規格說明</th>
+                        <th class="px-4 py-3 border-r font-medium text-blue-600 text-center">總數量</th>
+                        <th class="px-4 py-3 font-medium text-gray-600">點餐人名單</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100">
+                      {allOrdersSummary.length === 0 ? (
+                        <tr><td colSpan="4" class="px-4 py-8 text-center text-gray-400">點擊上方按鈕載入最新總表，或目前無人點餐。</td></tr>
+                      ) : (
+                        allOrdersSummary.map((row, idx) => (
+                          <tr key={idx} class="hover:bg-gray-50">
+                            <td class="px-4 py-4 border-r font-semibold text-gray-800">{row.item}</td>
+                            <td class="px-4 py-4 border-r text-gray-500">{row.size} / {row.sweetness} / {row.ice}</td>
+                            <td class="px-4 py-4 border-r text-center font-bold text-lg text-blue-600">{row.count} 杯</td>
+                            <td class="px-4 py-4 text-gray-500 text-xs whitespace-normal max-w-xs">{row.names.join(', ')}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 隱藏的主揪登入按鈕 (放在最右下角) */}
+          <div class="absolute bottom-4 right-4">
+             {!isAdmin && (
+               <button onClick={triggerAdminLogin} class="text-xs text-gray-300 hover:text-gray-500 transition-colors">
+                 ⚙️ 管理員登入
+               </button>
+             )}
+          </div>
+
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<DrinkOrderApp />);
+  </script>
+</body>
+</html>
