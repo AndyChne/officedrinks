@@ -29,12 +29,11 @@
       
       const [formData, setFormData] = useState({ name: '', item: '', size: '', sweetness: '', ice: '', topping: '' });
       const [customTopping, setCustomTopping] = useState('');
-      
-      // 新增：追蹤目前正在「修改」哪一筆訂單
       const [editingId, setEditingId] = useState(null);
 
       useEffect(() => {
-        fetch(GAS_WEB_APP_URL)
+        // 加上時間戳記避免快取
+        fetch(GAS_WEB_APP_URL + "?t=" + new Date().getTime())
           .then(res => res.json())
           .then(data => {
             if (data.status === "success") {
@@ -68,7 +67,7 @@
 
       const resetForm = (options = menuOptions) => {
         setFormData({
-          name: formData.name || '', // 保留姓名，方便連續點
+          name: formData.name || '', 
           item: options.items[0] || '',
           size: options.sizes[0] || '',
           sweetness: options.sweetnesses[0] || '',
@@ -84,13 +83,9 @@
         setFormData(prev => ({ ...prev, [name]: value }));
       };
 
-      // 點擊「修改」按鈕時，將舊資料填入表單
       const handleEditOrder = (order) => {
         setEditingId(order.id);
-        
-        // 判斷加料是不是「自訂的其他加料」
         const isCustomTopping = order.topping !== '無' && !menuOptions.toppings.includes(order.topping);
-        
         setFormData({
           name: order.name,
           item: order.item,
@@ -100,8 +95,6 @@
           topping: isCustomTopping ? '其他' : order.topping
         });
         setCustomTopping(isCustomTopping ? order.topping : '');
-        
-        // 畫面自動滾動回最上方，方便修改
         window.scrollTo({ top: 0, behavior: 'smooth' });
       };
 
@@ -116,28 +109,28 @@
 
         const finalTopping = formData.topping === '其他' ? customTopping.trim() : formData.topping;
         
-        // 如果是修改模式，就一併把舊的 ID 傳給後端去覆寫
-        const payload = { ...formData, topping: finalTopping, action: 'submitOrder', id: editingId };
+        // 【修復核心】：在送出前，強制決定好這筆訂單的 ID (新增就生新的，修改就用舊的)
+        const finalId = editingId || Date.now().toString();
+        
+        // 把決定好的 ID 塞進 payload，叫試算表必須用這個 ID
+        const payload = { ...formData, topping: finalTopping, action: 'submitOrder', id: finalId };
 
         setIsSubmitting(true);
         try {
-          const res = await fetch(GAS_WEB_APP_URL, {
+          await fetch(GAS_WEB_APP_URL, {
             method: 'POST', mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
           });
           
-          // 如果沒有 editingId，代表是新訂單，給他一個新的時間戳記當臨時 ID
-          const finalId = editingId || Date.now().toString();
-          const newOrderRecord = { ...payload, id: finalId };
+          // 前端本機紀錄直接使用剛剛送出去的那整包 payload
+          const newOrderRecord = { ...payload };
           
           setMyOrders(prev => {
             let updatedOrders;
             if (editingId) {
-              // 修改模式：替換掉原本的那一筆
               updatedOrders = prev.map(o => o.id === editingId ? newOrderRecord : o);
             } else {
-              // 新增模式：加在最後面
               updatedOrders = [...prev, newOrderRecord];
             }
             localStorage.setItem('drinkOrderCache', JSON.stringify({
@@ -147,7 +140,7 @@
             return updatedOrders;
           });
 
-          alert(editingId ? '修改成功！已更新至總表。' : '訂單已送出！');
+          alert(editingId ? '修改成功！已覆寫舊訂單。' : '訂單已送出！');
           resetForm(); 
 
         } catch (error) {
@@ -176,7 +169,8 @@
 
       const loadSummary = async () => {
         try {
-          const res = await fetch(GAS_WEB_APP_URL + "?action=getSummary");
+          // 加上時間戳記避免快取
+          const res = await fetch(GAS_WEB_APP_URL + "?action=getSummary&t=" + new Date().getTime());
           const data = await res.json();
           if (data.status === "success") {
             const summary = {};
@@ -209,7 +203,6 @@
 
       return (
         <div class="max-w-4xl mx-auto space-y-6 pb-20">
-          
           <div class="bg-white p-6 rounded-lg shadow-md flex flex-col sm:flex-row justify-between items-center gap-4">
             <div>
               <p class="text-sm text-blue-600 font-bold mb-1">{sysSettings.date} 揪團</p>
@@ -289,7 +282,6 @@
                         {isSubmitting ? '傳送中...' : (editingId ? '✅ 儲存修改' : '送出訂單')}
                       </button>
                       
-                      {/* 顯示取消修改按鈕 */}
                       {editingId && (
                         <button type="button" onClick={() => resetForm()} class="px-4 py-3 bg-gray-200 text-gray-700 rounded-md font-bold hover:bg-gray-300 transition-colors">
                           取消
@@ -305,7 +297,7 @@
               <div class="bg-white p-6 rounded-lg shadow-md max-h-[500px] overflow-y-auto">
                 <h2 class="text-xl font-bold mb-4 border-b pb-2 text-gray-700">本次點餐明細</h2>
                 {myOrders.length === 0 ? (
-                  <p class="text-gray-400 text-center py-8">送出後，這裡會顯示你點的飲料（重新整理也不會消失！）。</p>
+                  <p class="text-gray-400 text-center py-8">送出後，這裡會顯示你點的飲料。</p>
                 ) : (
                   <ul class="divide-y divide-gray-200">
                     {myOrders.map(order => (
@@ -332,7 +324,6 @@
             </div>
           ) : (
             <div class="space-y-6">
-              {/* 主揪控制面板保持不變 */}
               <div class="bg-gray-800 text-white p-6 rounded-lg shadow-md border-t-4 border-yellow-400">
                 <h2 class="text-xl font-bold mb-4 text-yellow-400">⚙️ 主揪控制面板</h2>
                 <form onSubmit={handleSaveSettings} class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
