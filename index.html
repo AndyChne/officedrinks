@@ -16,88 +16,140 @@
     const { useState, useMemo, useEffect } = React;
 
     // ⚠️ 請在這裡貼上你的 Google Apps Script 網頁應用程式網址
-    const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwGvnPjgtisXYmK0f8oVlBa_PaMD0wiwRUu67xawazaDidfUwcoJw4Oy_U0wsbQ9gRfgA/exec";
+    const GAS_WEB_APP_URL = "請將這段文字替換成你的_GAS_網頁應用程式網址";
 
     function DrinkOrderApp() {
       const [isLoading, setIsLoading] = useState(true);
       const [isAdmin, setIsAdmin] = useState(false);
       const [sysSettings, setSysSettings] = useState({ status: 'open', date: '', shop: '' });
-      
-      // 儲存從試算表抓下來的所有選單
       const [menuOptions, setMenuOptions] = useState({ items: [], sizes: [], sweetnesses: [], ices: [], toppings: [] });
-      
       const [myOrders, setMyOrders] = useState([]); 
       const [allOrdersSummary, setAllOrdersSummary] = useState([]);
       const [isSubmitting, setIsSubmitting] = useState(false);
       
-      const [formData, setFormData] = useState({
-        name: '', item: '', size: '', sweetness: '', ice: '', topping: ''
-      });
-      const [customTopping, setCustomTopping] = useState(''); // 專門儲存「其他」的加料內容
+      const [formData, setFormData] = useState({ name: '', item: '', size: '', sweetness: '', ice: '', topping: '' });
+      const [customTopping, setCustomTopping] = useState('');
+      
+      // 新增：追蹤目前正在「修改」哪一筆訂單
+      const [editingId, setEditingId] = useState(null);
 
-      // 網頁載入時，抓取「設定」與「所有選單」
       useEffect(() => {
         fetch(GAS_WEB_APP_URL)
           .then(res => res.json())
           .then(data => {
             if (data.status === "success") {
               const options = data.menuOptions;
-              setMenuOptions(options);
-              setSysSettings(data.settings);
+              const currentSettings = data.settings;
               
-              // 設定表單的預設值為試算表的第一個選項
-              setFormData({
-                name: '',
-                item: options.items[0] || '',
-                size: options.sizes[0] || '',
-                sweetness: options.sweetnesses[0] || '',
-                ice: options.ices[0] || '',
-                topping: options.toppings[0] || '無'
-              });
+              setMenuOptions(options);
+              setSysSettings(currentSettings);
+              resetForm(options);
+
+              const currentSession = `${currentSettings.date}-${currentSettings.shop}`;
+              const savedDataString = localStorage.getItem('drinkOrderCache');
+              
+              if (savedDataString) {
+                try {
+                  const savedData = JSON.parse(savedDataString);
+                  if (savedData.session === currentSession) {
+                    setMyOrders(savedData.orders || []);
+                  } else {
+                    localStorage.removeItem('drinkOrderCache');
+                  }
+                } catch (e) {
+                  localStorage.removeItem('drinkOrderCache');
+                }
+              }
             }
           })
           .catch(err => console.error(err))
           .finally(() => setIsLoading(false));
       }, []);
 
+      const resetForm = (options = menuOptions) => {
+        setFormData({
+          name: formData.name || '', // 保留姓名，方便連續點
+          item: options.items[0] || '',
+          size: options.sizes[0] || '',
+          sweetness: options.sweetnesses[0] || '',
+          ice: options.ices[0] || '',
+          topping: options.toppings[0] || '無'
+        });
+        setCustomTopping('');
+        setEditingId(null);
+      };
+
       const handleChange = (e) => {
         const { name, value } = e.target;
         setFormData(prev => ({ ...prev, [name]: value }));
       };
 
-      // 【一般使用者】送出訂單
+      // 點擊「修改」按鈕時，將舊資料填入表單
+      const handleEditOrder = (order) => {
+        setEditingId(order.id);
+        
+        // 判斷加料是不是「自訂的其他加料」
+        const isCustomTopping = order.topping !== '無' && !menuOptions.toppings.includes(order.topping);
+        
+        setFormData({
+          name: order.name,
+          item: order.item,
+          size: order.size,
+          sweetness: order.sweetness,
+          ice: order.ice,
+          topping: isCustomTopping ? '其他' : order.topping
+        });
+        setCustomTopping(isCustomTopping ? order.topping : '');
+        
+        // 畫面自動滾動回最上方，方便修改
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      };
+
       const handleSubmit = async (e) => {
         e.preventDefault();
         
-        // --- 嚴格驗證所有選項 ---
         if (!formData.name.trim()) return alert('請輸入姓名！');
-        if (!formData.item) return alert('請選擇飲品品項！');
-        if (!formData.size) return alert('請選擇容量！');
-        if (!formData.sweetness) return alert('請選擇甜度！');
-        if (!formData.ice) return alert('請選擇冰量！');
-        if (!formData.topping) return alert('請選擇加料（若無請選"無"）！');
-        
-        // 驗證加料的「其他」欄位
-        if (formData.topping === '其他' && !customTopping.trim()) {
-          return alert('請輸入你想加的配料名稱！');
+        if (!formData.item || !formData.size || !formData.sweetness || !formData.ice || !formData.topping) {
+            return alert('請確保所有選項都已填寫！');
         }
+        if (formData.topping === '其他' && !customTopping.trim()) return alert('請輸入你想加的配料名稱！');
 
-        // 決定最終要送出的加料內容
         const finalTopping = formData.topping === '其他' ? customTopping.trim() : formData.topping;
-        const payload = { ...formData, topping: finalTopping, action: 'submitOrder' };
+        
+        // 如果是修改模式，就一併把舊的 ID 傳給後端去覆寫
+        const payload = { ...formData, topping: finalTopping, action: 'submitOrder', id: editingId };
 
         setIsSubmitting(true);
         try {
-          await fetch(GAS_WEB_APP_URL, {
+          const res = await fetch(GAS_WEB_APP_URL, {
             method: 'POST', mode: 'no-cors',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
           });
           
-          setMyOrders(prev => [...prev, { ...payload, id: Date.now() }]);
-          setFormData(prev => ({ ...prev, name: '' })); // 清空姓名，保留其他選項方便連點
-          setCustomTopping(''); // 清空自訂加料
-          alert('訂單已送出！');
+          // 如果沒有 editingId，代表是新訂單，給他一個新的時間戳記當臨時 ID
+          const finalId = editingId || Date.now().toString();
+          const newOrderRecord = { ...payload, id: finalId };
+          
+          setMyOrders(prev => {
+            let updatedOrders;
+            if (editingId) {
+              // 修改模式：替換掉原本的那一筆
+              updatedOrders = prev.map(o => o.id === editingId ? newOrderRecord : o);
+            } else {
+              // 新增模式：加在最後面
+              updatedOrders = [...prev, newOrderRecord];
+            }
+            localStorage.setItem('drinkOrderCache', JSON.stringify({
+              session: `${sysSettings.date}-${sysSettings.shop}`,
+              orders: updatedOrders
+            }));
+            return updatedOrders;
+          });
+
+          alert(editingId ? '修改成功！已更新至總表。' : '訂單已送出！');
+          resetForm(); 
+
         } catch (error) {
           alert('傳送失敗，請聯絡主揪！');
         } finally {
@@ -105,7 +157,6 @@
         }
       };
 
-      // 【主揪功能】儲存系統設定
       const handleSaveSettings = async (e) => {
         e.preventDefault();
         setIsSubmitting(true);
@@ -123,7 +174,6 @@
         }
       };
 
-      // 【主揪功能】載入所有人的訂單總表
       const loadSummary = async () => {
         try {
           const res = await fetch(GAS_WEB_APP_URL + "?action=getSummary");
@@ -131,7 +181,6 @@
           if (data.status === "success") {
             const summary = {};
             data.data.forEach(order => {
-              // 總表合併時，把加料也列入區分條件
               const key = `${order.item} | ${order.size} | ${order.sweetness} | ${order.ice} | +${order.topping}`;
               if (summary[key]) {
                 summary[key].count += 1;
@@ -155,7 +204,6 @@
 
       if (isLoading) return <div class="text-center mt-20 text-gray-500">系統載入中...</div>;
 
-      // 準備加料的選項 (自動在最後補上「其他」)
       const toppingOptions = [...menuOptions.toppings];
       if (!toppingOptions.includes('其他')) toppingOptions.push('其他');
 
@@ -177,8 +225,10 @@
 
           {!isAdmin ? (
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div class="bg-white p-6 rounded-lg shadow-md">
-                <h2 class="text-xl font-bold mb-4 border-b pb-2 text-gray-700">新增我的訂單</h2>
+              <div class="bg-white p-6 rounded-lg shadow-md border-t-4 border-blue-500">
+                <h2 class="text-xl font-bold mb-4 border-b pb-2 text-gray-700">
+                  {editingId ? <span class="text-orange-500">✏️ 正在修改訂單</span> : '新增我的訂單'}
+                </h2>
                 {sysSettings.status === 'open' ? (
                   <form onSubmit={handleSubmit} class="space-y-4">
                     <div>
@@ -227,7 +277,6 @@
                       </div>
                     </div>
 
-                    {/* 當選擇「其他」時，顯示文字輸入框 */}
                     {formData.topping === '其他' && (
                       <div class="p-3 bg-blue-50 rounded-md border border-blue-100">
                         <label class="block text-sm text-blue-800 font-medium">✏️ 請輸入想加的配料</label>
@@ -235,9 +284,18 @@
                       </div>
                     )}
 
-                    <button type="submit" disabled={isSubmitting} class="w-full text-white bg-blue-600 hover:bg-blue-700 py-3 px-4 rounded-md font-bold transition-colors mt-4">
-                      {isSubmitting ? '傳送中...' : '送出訂單'}
-                    </button>
+                    <div class="flex gap-2 pt-2">
+                      <button type="submit" disabled={isSubmitting} class={`flex-1 text-white py-3 px-4 rounded-md font-bold transition-colors ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                        {isSubmitting ? '傳送中...' : (editingId ? '✅ 儲存修改' : '送出訂單')}
+                      </button>
+                      
+                      {/* 顯示取消修改按鈕 */}
+                      {editingId && (
+                        <button type="button" onClick={() => resetForm()} class="px-4 py-3 bg-gray-200 text-gray-700 rounded-md font-bold hover:bg-gray-300 transition-colors">
+                          取消
+                        </button>
+                      )}
+                    </div>
                   </form>
                 ) : (
                   <div class="text-center py-10 text-gray-500"><p class="text-lg font-semibold">主揪已經收單囉 🛑</p></div>
@@ -247,14 +305,25 @@
               <div class="bg-white p-6 rounded-lg shadow-md max-h-[500px] overflow-y-auto">
                 <h2 class="text-xl font-bold mb-4 border-b pb-2 text-gray-700">本次點餐明細</h2>
                 {myOrders.length === 0 ? (
-                  <p class="text-gray-400 text-center py-8">送出後，這裡會顯示你點的飲料。</p>
+                  <p class="text-gray-400 text-center py-8">送出後，這裡會顯示你點的飲料（重新整理也不會消失！）。</p>
                 ) : (
                   <ul class="divide-y divide-gray-200">
                     {myOrders.map(order => (
-                      <li key={order.id} class="py-3">
-                        <p class="font-bold text-gray-800">{order.name}</p>
-                        <p class="text-sm text-gray-500">{order.item} ({order.size}) / {order.sweetness} / {order.ice}</p>
-                        {order.topping !== '無' && <p class="text-sm text-blue-600 font-medium">+ {order.topping}</p>}
+                      <li key={order.id} class={`py-3 flex justify-between items-start ${editingId === order.id ? 'bg-orange-50 p-2 rounded-md border border-orange-200' : ''}`}>
+                        <div>
+                          <p class="font-bold text-gray-800">{order.name}</p>
+                          <p class="text-sm text-gray-500">{order.item} ({order.size}) / {order.sweetness} / {order.ice}</p>
+                          {order.topping !== '無' && <p class="text-sm text-blue-600 font-medium">+ {order.topping}</p>}
+                        </div>
+                        {sysSettings.status === 'open' && (
+                          <button 
+                            onClick={() => handleEditOrder(order)} 
+                            class="text-orange-500 hover:text-orange-700 text-sm font-bold border border-orange-500 rounded px-2 py-1 mt-1"
+                            disabled={editingId === order.id}
+                          >
+                            {editingId === order.id ? '修改中...' : '✏️ 修改'}
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -263,6 +332,7 @@
             </div>
           ) : (
             <div class="space-y-6">
+              {/* 主揪控制面板保持不變 */}
               <div class="bg-gray-800 text-white p-6 rounded-lg shadow-md border-t-4 border-yellow-400">
                 <h2 class="text-xl font-bold mb-4 text-yellow-400">⚙️ 主揪控制面板</h2>
                 <form onSubmit={handleSaveSettings} class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
