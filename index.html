@@ -32,7 +32,6 @@
       const [editingId, setEditingId] = useState(null);
 
       useEffect(() => {
-        // 加上時間戳記避免快取
         fetch(GAS_WEB_APP_URL + "?t=" + new Date().getTime())
           .then(res => res.json())
           .then(data => {
@@ -98,6 +97,38 @@
         window.scrollTo({ top: 0, behavior: 'smooth' });
       };
 
+      // 處理刪除訂單
+      const handleDeleteOrder = async (id) => {
+        if (!window.confirm("確定要刪除這筆訂單嗎？")) return;
+
+        setIsSubmitting(true);
+        try {
+          await fetch(GAS_WEB_APP_URL, {
+            method: 'POST', mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'deleteOrder', id: id })
+          });
+          
+          setMyOrders(prev => {
+            const updatedOrders = prev.filter(o => o.id !== id);
+            localStorage.setItem('drinkOrderCache', JSON.stringify({
+              session: `${sysSettings.date}-${sysSettings.shop}`,
+              orders: updatedOrders
+            }));
+            return updatedOrders;
+          });
+
+          // 如果使用者刪除的剛好是正在修改的訂單，就重置表單
+          if (editingId === id) resetForm();
+
+          alert('訂單已刪除！');
+        } catch (error) {
+          alert('刪除失敗，請聯絡主揪！');
+        } finally {
+          setIsSubmitting(false);
+        }
+      };
+
       const handleSubmit = async (e) => {
         e.preventDefault();
         
@@ -108,11 +139,8 @@
         if (formData.topping === '其他' && !customTopping.trim()) return alert('請輸入你想加的配料名稱！');
 
         const finalTopping = formData.topping === '其他' ? customTopping.trim() : formData.topping;
-        
-        // 【修復核心】：在送出前，強制決定好這筆訂單的 ID (新增就生新的，修改就用舊的)
         const finalId = editingId || Date.now().toString();
         
-        // 把決定好的 ID 塞進 payload，叫試算表必須用這個 ID
         const payload = { ...formData, topping: finalTopping, action: 'submitOrder', id: finalId };
 
         setIsSubmitting(true);
@@ -123,7 +151,6 @@
             body: JSON.stringify(payload)
           });
           
-          // 前端本機紀錄直接使用剛剛送出去的那整包 payload
           const newOrderRecord = { ...payload };
           
           setMyOrders(prev => {
@@ -169,7 +196,6 @@
 
       const loadSummary = async () => {
         try {
-          // 加上時間戳記避免快取
           const res = await fetch(GAS_WEB_APP_URL + "?action=getSummary&t=" + new Date().getTime());
           const data = await res.json();
           if (data.status === "success") {
@@ -279,11 +305,11 @@
 
                     <div class="flex gap-2 pt-2">
                       <button type="submit" disabled={isSubmitting} class={`flex-1 text-white py-3 px-4 rounded-md font-bold transition-colors ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                        {isSubmitting ? '傳送中...' : (editingId ? '✅ 儲存修改' : '送出訂單')}
+                        {isSubmitting ? '處理中...' : (editingId ? '✅ 儲存修改' : '送出訂單')}
                       </button>
                       
                       {editingId && (
-                        <button type="button" onClick={() => resetForm()} class="px-4 py-3 bg-gray-200 text-gray-700 rounded-md font-bold hover:bg-gray-300 transition-colors">
+                        <button type="button" onClick={() => resetForm()} disabled={isSubmitting} class="px-4 py-3 bg-gray-200 text-gray-700 rounded-md font-bold hover:bg-gray-300 transition-colors">
                           取消
                         </button>
                       )}
@@ -308,13 +334,22 @@
                           {order.topping !== '無' && <p class="text-sm text-blue-600 font-medium">+ {order.topping}</p>}
                         </div>
                         {sysSettings.status === 'open' && (
-                          <button 
-                            onClick={() => handleEditOrder(order)} 
-                            class="text-orange-500 hover:text-orange-700 text-sm font-bold border border-orange-500 rounded px-2 py-1 mt-1"
-                            disabled={editingId === order.id}
-                          >
-                            {editingId === order.id ? '修改中...' : '✏️ 修改'}
-                          </button>
+                          <div class="flex gap-2 mt-1">
+                            <button 
+                              onClick={() => handleEditOrder(order)} 
+                              class="text-orange-500 hover:text-orange-700 text-sm font-bold border border-orange-500 rounded px-2 py-1"
+                              disabled={isSubmitting}
+                            >
+                              {editingId === order.id ? '修改中' : '✏️ 修改'}
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteOrder(order.id)} 
+                              class="text-red-500 hover:text-red-700 text-sm font-bold border border-red-500 rounded px-2 py-1"
+                              disabled={isSubmitting}
+                            >
+                              🗑️ 刪除
+                            </button>
+                          </div>
                         )}
                       </li>
                     ))}
