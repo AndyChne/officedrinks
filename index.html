@@ -27,8 +27,15 @@
       const [allOrdersSummary, setAllOrdersSummary] = useState([]);
       const [isSubmitting, setIsSubmitting] = useState(false);
       
-      const [formData, setFormData] = useState({ name: '', item: '', size: '', sweetness: '', ice: '', topping: '' });
+      const [formData, setFormData] = useState({ name: '', item: '', size: '', sweetness: '', ice: '', topping: '', note: '' });
+      
+      // 所有選項的自訂狀態
+      const [customItem, setCustomItem] = useState('');
+      const [customSize, setCustomSize] = useState('');
+      const [customSweetness, setCustomSweetness] = useState('');
+      const [customIce, setCustomIce] = useState('');
       const [customTopping, setCustomTopping] = useState('');
+      
       const [editingId, setEditingId] = useState(null);
 
       useEffect(() => {
@@ -37,13 +44,11 @@
           .then(data => {
             if (data.status === "success") {
               const options = data.menuOptions;
-              const currentSettings = data.settings;
-              
               setMenuOptions(options);
-              setSysSettings(currentSettings);
+              setSysSettings(data.settings);
               resetForm(options);
 
-              const currentSession = `${currentSettings.date}-${currentSettings.shop}`;
+              const currentSession = `${data.settings.date}-${data.settings.shop}`;
               const savedDataString = localStorage.getItem('drinkOrderCache');
               
               if (savedDataString) {
@@ -71,9 +76,10 @@
           size: options.sizes[0] || '',
           sweetness: options.sweetnesses[0] || '',
           ice: options.ices[0] || '',
-          topping: options.toppings[0] || '無'
+          topping: options.toppings[0] || '無',
+          note: ''
         });
-        setCustomTopping('');
+        setCustomItem(''); setCustomSize(''); setCustomSweetness(''); setCustomIce(''); setCustomTopping('');
         setEditingId(null);
       };
 
@@ -82,25 +88,37 @@
         setFormData(prev => ({ ...prev, [name]: value }));
       };
 
+      // 載入舊訂單進入編輯模式
       const handleEditOrder = (order) => {
         setEditingId(order.id);
+        
+        const isCustomItem = !menuOptions.items.includes(order.item);
+        const isCustomSize = !menuOptions.sizes.includes(order.size);
+        const isCustomSweetness = !menuOptions.sweetnesses.includes(order.sweetness);
+        const isCustomIce = !menuOptions.ices.includes(order.ice);
         const isCustomTopping = order.topping !== '無' && !menuOptions.toppings.includes(order.topping);
+        
         setFormData({
           name: order.name,
-          item: order.item,
-          size: order.size,
-          sweetness: order.sweetness,
-          ice: order.ice,
-          topping: isCustomTopping ? '其他' : order.topping
+          item: isCustomItem ? '其他' : order.item,
+          size: isCustomSize ? '其他' : order.size,
+          sweetness: isCustomSweetness ? '其他' : order.sweetness,
+          ice: isCustomIce ? '其他' : order.ice,
+          topping: isCustomTopping ? '其他' : order.topping,
+          note: order.note || ''
         });
+        
+        setCustomItem(isCustomItem ? order.item : '');
+        setCustomSize(isCustomSize ? order.size : '');
+        setCustomSweetness(isCustomSweetness ? order.sweetness : '');
+        setCustomIce(isCustomIce ? order.ice : '');
         setCustomTopping(isCustomTopping ? order.topping : '');
+        
         window.scrollTo({ top: 0, behavior: 'smooth' });
       };
 
-      // 處理刪除訂單
       const handleDeleteOrder = async (id) => {
         if (!window.confirm("確定要刪除這筆訂單嗎？")) return;
-
         setIsSubmitting(true);
         try {
           await fetch(GAS_WEB_APP_URL, {
@@ -118,9 +136,7 @@
             return updatedOrders;
           });
 
-          // 如果使用者刪除的剛好是正在修改的訂單，就重置表單
           if (editingId === id) resetForm();
-
           alert('訂單已刪除！');
         } catch (error) {
           alert('刪除失敗，請聯絡主揪！');
@@ -132,16 +148,29 @@
       const handleSubmit = async (e) => {
         e.preventDefault();
         
+        // 嚴格驗證
         if (!formData.name.trim()) return alert('請輸入姓名！');
-        if (!formData.item || !formData.size || !formData.sweetness || !formData.ice || !formData.topping) {
-            return alert('請確保所有選項都已填寫！');
-        }
-        if (formData.topping === '其他' && !customTopping.trim()) return alert('請輸入你想加的配料名稱！');
+        if (!formData.item || !formData.size || !formData.sweetness || !formData.ice || !formData.topping) return alert('請確保所有必填選項都已填寫！');
+        
+        if (formData.item === '其他' && !customItem.trim()) return alert('請輸入自訂的飲品品項！');
+        if (formData.size === '其他' && !customSize.trim()) return alert('請輸入自訂的容量！');
+        if (formData.sweetness === '其他' && !customSweetness.trim()) return alert('請輸入自訂的甜度！');
+        if (formData.ice === '其他' && !customIce.trim()) return alert('請輸入自訂的冰量！');
+        if (formData.topping === '其他' && !customTopping.trim()) return alert('請輸入想加的配料名稱！');
 
+        const finalItem = formData.item === '其他' ? customItem.trim() : formData.item;
+        const finalSize = formData.size === '其他' ? customSize.trim() : formData.size;
+        const finalSweetness = formData.sweetness === '其他' ? customSweetness.trim() : formData.sweetness;
+        const finalIce = formData.ice === '其他' ? customIce.trim() : formData.ice;
         const finalTopping = formData.topping === '其他' ? customTopping.trim() : formData.topping;
+        
         const finalId = editingId || Date.now().toString();
         
-        const payload = { ...formData, topping: finalTopping, action: 'submitOrder', id: finalId };
+        const payload = { 
+          ...formData, 
+          item: finalItem, size: finalSize, sweetness: finalSweetness, ice: finalIce, topping: finalTopping, 
+          action: 'submitOrder', id: finalId 
+        };
 
         setIsSubmitting(true);
         try {
@@ -151,15 +180,8 @@
             body: JSON.stringify(payload)
           });
           
-          const newOrderRecord = { ...payload };
-          
           setMyOrders(prev => {
-            let updatedOrders;
-            if (editingId) {
-              updatedOrders = prev.map(o => o.id === editingId ? newOrderRecord : o);
-            } else {
-              updatedOrders = [...prev, newOrderRecord];
-            }
+            let updatedOrders = editingId ? prev.map(o => o.id === editingId ? payload : o) : [...prev, payload];
             localStorage.setItem('drinkOrderCache', JSON.stringify({
               session: `${sysSettings.date}-${sysSettings.shop}`,
               orders: updatedOrders
@@ -201,7 +223,8 @@
           if (data.status === "success") {
             const summary = {};
             data.data.forEach(order => {
-              const key = `${order.item} | ${order.size} | ${order.sweetness} | ${order.ice} | +${order.topping}`;
+              // 備註也加入分群條件，因為不同備註代表特殊需求
+              const key = `${order.item} | ${order.size} | ${order.sweetness} | ${order.ice} | +${order.topping} | Note:${order.note}`;
               if (summary[key]) {
                 summary[key].count += 1;
                 summary[key].names.push(order.name);
@@ -222,10 +245,10 @@
         else if (pwd !== null) alert("密碼錯誤");
       };
 
-      if (isLoading) return <div class="text-center mt-20 text-gray-500">系統載入中...</div>;
+      // 幫所有選單補上「其他」
+      const getOptionsWithOther = (arr) => arr.includes('其他') ? arr : [...arr, '其他'];
 
-      const toppingOptions = [...menuOptions.toppings];
-      if (!toppingOptions.includes('其他')) toppingOptions.push('其他');
+      if (isLoading) return <div class="text-center mt-20 text-gray-500">系統載入中...</div>;
 
       return (
         <div class="max-w-4xl mx-auto space-y-6 pb-20">
@@ -254,54 +277,69 @@
                       <label class="block text-sm font-medium text-gray-700">姓名 <span class="text-red-500">*</span></label>
                       <input type="text" name="name" value={formData.name} onChange={handleChange} class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-blue-500" placeholder="你的名字" disabled={isSubmitting}/>
                     </div>
+                    
                     <div>
                       <label class="block text-sm font-medium text-gray-700">飲品品項 <span class="text-red-500">*</span></label>
                       <select name="item" value={formData.item} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2 bg-white" disabled={isSubmitting}>
                         <option value="" disabled>請選擇飲品...</option>
-                        {menuOptions.items.map((item, i) => <option key={i} value={item}>{item}</option>)}
+                        {getOptionsWithOther(menuOptions.items).map((item, i) => <option key={i} value={item}>{item}</option>)}
                       </select>
+                      {formData.item === '其他' && (
+                        <input type="text" value={customItem} onChange={e => setCustomItem(e.target.value)} class="mt-2 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-blue-500 bg-blue-50" placeholder="✏️ 請輸入自訂飲品" disabled={isSubmitting}/>
+                      )}
                     </div>
                     
                     <div class="grid grid-cols-2 gap-4">
                       <div>
                         <label class="block text-sm text-gray-700">容量 <span class="text-red-500">*</span></label>
-                        <select name="size" value={formData.size} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2 bg-white">
+                        <select name="size" value={formData.size} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2 bg-white w-full">
                           <option value="" disabled>選擇容量</option>
-                          {menuOptions.sizes.map(s => <option key={s} value={s}>{s}</option>)}
+                          {getOptionsWithOther(menuOptions.sizes).map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
+                        {formData.size === '其他' && (
+                          <input type="text" value={customSize} onChange={e => setCustomSize(e.target.value)} class="mt-2 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-blue-500 bg-blue-50" placeholder="✏️ 自訂容量" disabled={isSubmitting}/>
+                        )}
                       </div>
                       <div>
                         <label class="block text-sm text-gray-700">冰量 <span class="text-red-500">*</span></label>
-                        <select name="ice" value={formData.ice} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2 bg-white">
+                        <select name="ice" value={formData.ice} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2 bg-white w-full">
                           <option value="" disabled>選擇冰量</option>
-                          {menuOptions.ices.map(s => <option key={s} value={s}>{s}</option>)}
+                          {getOptionsWithOther(menuOptions.ices).map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
+                        {formData.ice === '其他' && (
+                          <input type="text" value={customIce} onChange={e => setCustomIce(e.target.value)} class="mt-2 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-blue-500 bg-blue-50" placeholder="✏️ 自訂冰量" disabled={isSubmitting}/>
+                        )}
                       </div>
                     </div>
 
                     <div class="grid grid-cols-2 gap-4">
                       <div>
                         <label class="block text-sm text-gray-700">甜度 <span class="text-red-500">*</span></label>
-                        <select name="sweetness" value={formData.sweetness} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2 bg-white">
+                        <select name="sweetness" value={formData.sweetness} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2 bg-white w-full">
                           <option value="" disabled>選擇甜度</option>
-                          {menuOptions.sweetnesses.map(s => <option key={s} value={s}>{s}</option>)}
+                          {getOptionsWithOther(menuOptions.sweetnesses).map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
+                        {formData.sweetness === '其他' && (
+                          <input type="text" value={customSweetness} onChange={e => setCustomSweetness(e.target.value)} class="mt-2 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-blue-500 bg-blue-50" placeholder="✏️ 自訂甜度" disabled={isSubmitting}/>
+                        )}
                       </div>
                       <div>
                         <label class="block text-sm text-gray-700">加料 <span class="text-red-500">*</span></label>
-                        <select name="topping" value={formData.topping} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2 bg-white">
+                        <select name="topping" value={formData.topping} onChange={handleChange} class="mt-1 block w-full rounded-md border p-2 bg-white w-full">
                           <option value="" disabled>選擇加料</option>
-                          {toppingOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                          {getOptionsWithOther(menuOptions.toppings).map(t => <option key={t} value={t}>{t}</option>)}
                         </select>
+                        {formData.topping === '其他' && (
+                          <input type="text" value={customTopping} onChange={e => setCustomTopping(e.target.value)} class="mt-2 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-blue-500 bg-blue-50" placeholder="✏️ 自訂加料" disabled={isSubmitting}/>
+                        )}
                       </div>
                     </div>
 
-                    {formData.topping === '其他' && (
-                      <div class="p-3 bg-blue-50 rounded-md border border-blue-100">
-                        <label class="block text-sm text-blue-800 font-medium">✏️ 請輸入想加的配料</label>
-                        <input type="text" value={customTopping} onChange={e => setCustomTopping(e.target.value)} class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-blue-500" placeholder="例如：雙份布丁、西米露" disabled={isSubmitting}/>
-                      </div>
-                    )}
+                    {/* 新增：備註欄位 */}
+                    <div class="pt-2">
+                      <label class="block text-sm font-medium text-gray-700">備註 <span class="text-gray-400 font-normal">(選填)</span></label>
+                      <input type="text" name="note" value={formData.note} onChange={handleChange} class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-blue-500" placeholder="例如：自備環保杯、晚點拿..." disabled={isSubmitting}/>
+                    </div>
 
                     <div class="flex gap-2 pt-2">
                       <button type="submit" disabled={isSubmitting} class={`flex-1 text-white py-3 px-4 rounded-md font-bold transition-colors ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
@@ -332,21 +370,14 @@
                           <p class="font-bold text-gray-800">{order.name}</p>
                           <p class="text-sm text-gray-500">{order.item} ({order.size}) / {order.sweetness} / {order.ice}</p>
                           {order.topping !== '無' && <p class="text-sm text-blue-600 font-medium">+ {order.topping}</p>}
+                          {order.note && <p class="text-xs text-gray-500 mt-1">📝 備註：{order.note}</p>}
                         </div>
                         {sysSettings.status === 'open' && (
-                          <div class="flex gap-2 mt-1">
-                            <button 
-                              onClick={() => handleEditOrder(order)} 
-                              class="text-orange-500 hover:text-orange-700 text-sm font-bold border border-orange-500 rounded px-2 py-1"
-                              disabled={isSubmitting}
-                            >
+                          <div class="flex flex-col gap-2 mt-1">
+                            <button onClick={() => handleEditOrder(order)} class="text-orange-500 hover:text-orange-700 text-xs font-bold border border-orange-500 rounded px-2 py-1" disabled={isSubmitting}>
                               {editingId === order.id ? '修改中' : '✏️ 修改'}
                             </button>
-                            <button 
-                              onClick={() => handleDeleteOrder(order.id)} 
-                              class="text-red-500 hover:text-red-700 text-sm font-bold border border-red-500 rounded px-2 py-1"
-                              disabled={isSubmitting}
-                            >
+                            <button onClick={() => handleDeleteOrder(order.id)} class="text-red-500 hover:text-red-700 text-xs font-bold border border-red-500 rounded px-2 py-1" disabled={isSubmitting}>
                               🗑️ 刪除
                             </button>
                           </div>
@@ -398,19 +429,21 @@
                         <th class="px-4 py-3 border-r font-medium text-gray-600">飲品名稱</th>
                         <th class="px-4 py-3 border-r font-medium text-gray-600">規格說明 (大小/甜/冰)</th>
                         <th class="px-4 py-3 border-r font-medium text-blue-600">加料</th>
+                        <th class="px-4 py-3 border-r font-medium text-purple-600">備註</th>
                         <th class="px-4 py-3 border-r font-medium text-blue-600 text-center">總數量</th>
                         <th class="px-4 py-3 font-medium text-gray-600">點餐人名單</th>
                       </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-100">
                       {allOrdersSummary.length === 0 ? (
-                        <tr><td colSpan="5" class="px-4 py-8 text-center text-gray-400">點擊上方按鈕載入最新總表，或目前無人點餐。</td></tr>
+                        <tr><td colSpan="6" class="px-4 py-8 text-center text-gray-400">點擊上方按鈕載入最新總表，或目前無人點餐。</td></tr>
                       ) : (
                         allOrdersSummary.map((row, idx) => (
                           <tr key={idx} class="hover:bg-gray-50">
                             <td class="px-4 py-4 border-r font-semibold text-gray-800">{row.item}</td>
                             <td class="px-4 py-4 border-r text-gray-500">{row.size} / {row.sweetness} / {row.ice}</td>
                             <td class="px-4 py-4 border-r text-blue-600 font-medium">{row.topping === '無' ? '-' : `+ ${row.topping}`}</td>
+                            <td class="px-4 py-4 border-r text-purple-600 font-medium text-xs whitespace-normal max-w-[150px]">{row.note || '-'}</td>
                             <td class="px-4 py-4 border-r text-center font-bold text-lg text-blue-600">{row.count} 杯</td>
                             <td class="px-4 py-4 text-gray-500 text-xs whitespace-normal max-w-xs">{row.names.join(', ')}</td>
                           </tr>
